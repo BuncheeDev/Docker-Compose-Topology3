@@ -1,0 +1,75 @@
+services:
+  # ============================================================================
+  # PostgreSQL Database Container
+  # ============================================================================
+  database:
+    image: postgres:16-alpine
+    container_name: topology_db
+    environment:
+      POSTGRES_DB: topology_db
+      POSTGRES_USER: topology_user
+      POSTGRES_PASSWORD: topology_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - topology_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U topology_user -d topology_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Python FastAPI Backend Container
+  # ============================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: topology_backend
+    environment:
+      DATABASE_URL: postgresql://topology_user:topology_password@database:5432/topology_db
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+      # Read-only access to the Docker daemon so the API can map Machine -> Container -> Image
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - topology_network
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ============================================================================
+  # Vue.js3 Frontend Container
+  # ============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: topology_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    depends_on:
+      - backend
+    networks:
+      - topology_network
+    environment:
+      VITE_API_URL: http://localhost:8001
+    command: npm run dev -- --host
+
+networks:
+  topology_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
